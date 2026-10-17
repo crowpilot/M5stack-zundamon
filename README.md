@@ -95,7 +95,7 @@ pio device monitor           # 115200
 
 コードは MIT（[LICENSE](LICENSE)）。同梱物と規約は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-**VOICEVOX:ずんだもん**　（ず・ω・きょ）
+**VOICEVOX:ずんだもん**
 
 音声認識の学習には ReazonSpeech と VOICEVOX の各話者の合成音声を使っています（参照元とクレジットは [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）。
 
