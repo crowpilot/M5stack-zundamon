@@ -3,21 +3,22 @@
 M5Stack Core2 1台で、話しかけると **聞き取って → ずんだもんLLMが返事を考えて → 画面に出して → ずんだもんの声で読み上げる** 試作です。
 Wi-Fi・サーバー・SDカードは使いません。すべて Core2（ESP32、PSRAM 4MB、フラッシュ 16MB）の中で動きます。
 
-版: **v0.0.1**（最初の試作。[CHANGELOG.md](CHANGELOG.md)）
+版: **v0.0.2**（[CHANGELOG.md](CHANGELOG.md)）
 
 ## しくみ
 
 ```
 マイク → 発話区間検出 → かな音声認識（kana_asr）→ 登録フレーズ照合
-       → ずんだもんLLM（約70万パラメータ、気持ちタグつき）→ 画面に返事
-       → 読み辞書でカタカナ＋簡易アクセント → VCV単位接続TTS → スピーカー
+       → ずんだもんLLM（約70万パラメータ、気持ちタグつき）→ 画面に返事（1トークンずつ）
+       → 句読点まで来たら 読み辞書でカタカナ＋簡易アクセント → VCV単位接続TTS → スピーカー（裏で再生しながら次の句を生成）
 ```
 
 | 処理 | 時間（実機） |
 |---|---|
 | 聞き取り | 約0.3秒（話し終わりの検出 0.7秒は別） |
-| 返事を作る | 約2〜2.5秒（10トークン前後） |
-| 音声の合成 | 約0.08秒（2〜3秒の音声） |
+| 返事を作る | 約2〜3秒（10トークン前後）。最初の句ができた時点で喋り始める |
+| 喋り出しまで | 約1〜2秒（話しかけの処理開始から） |
+| 音声の合成 | 1句あたり約0.04秒 |
 
 ## 必要なもの
 
@@ -33,9 +34,9 @@ Wi-Fi・サーバー・SDカードは使いません。すべて Core2（ESP32�
 | `models/kana_asr.bin` | 音声認識の重み（約0.7MB。学習データは [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)） | 同梱 |
 | `voice/bank_mu.bin` | ずんだもんの VCV 単位音声（8bit μ-law、約9MB） | [Releases](https://github.com/crowpilot/M5stack-zundamon/releases) の `M5stack-zundamon-voice-bank.bin` を `voice/bank_mu.bin` として置く |
 
-すぐ試すだけなら、Releases の `M5stack-zundamon-v0.0.1-core2.bin` を 0x0 に、`M5stack-zundamon-voice-bank.bin` を 0x490000 に書けば動きます（ビルド不要）。
+すぐ試すだけなら、Releases の `M5stack-zundamon-v<版>-core2.bin` を 0x0 に、`M5stack-zundamon-voice-bank.bin` を 0x490000 に書けば動きます（ビルド不要）。
 ```
-esptool.py --chip esp32 --baud 460800 write_flash 0x0 M5stack-zundamon-v0.0.1-core2.bin 0x490000 M5stack-zundamon-voice-bank.bin
+esptool.py --chip esp32 --baud 460800 write_flash 0x0 M5stack-zundamon-v0.0.2-core2.bin 0x490000 M5stack-zundamon-voice-bank.bin
 ```
 
 音声バンクを自分で作り直すとき（VOICEVOX Core 0.16 以降の Python 版が必要。`VV_DIR` に Core の場所）:

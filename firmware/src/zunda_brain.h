@@ -21,10 +21,14 @@ extern "C" {
 // タグ・話者マーカーのトークン番号を語彙の文字列から引く。0=成功、負=見つからない（タグなしモデルなど）
 int zunda_brain_init(Llm *m);
 
-// 返事を1つ作る。on_piece は1トークンごとに表示用の文字片で呼ばれる（NULL可）
+// 返事を1つ作る。on_piece は1トークンごとに、表示用の文字片と「次の位置の logits」で呼ばれる（NULL可）
 // 戻り値: 生成したトークン数。feel には 0〜7（zunda_feel_name で名前）
-int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *feel,
-                      void (*on_piece)(const char *piece, void *ctx), void *ctx);
+typedef void (*zunda_piece_fn)(const char *piece, const float *next_logits, void *ctx);
+int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *feel, zunda_piece_fn on_piece,
+                      void *ctx);
+
+// logits をタグ8個だけに絞って一番の気持ち（0〜7）。返事の途中で「今終わるならどの気持ちか」を見るのに使う
+int zunda_feel_from_logits(const float *logits);
 
 const char *zunda_feel_name(int feel);  // "ふつう" など（範囲外は "?"）
 

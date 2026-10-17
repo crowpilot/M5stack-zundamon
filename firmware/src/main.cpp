@@ -137,12 +137,20 @@ static float chunk_level(const int16_t* x) {
 //   222-   気持ち・時間
 static constexpr int REPLY_Y = 104;
 
+// 返事を表示している途中（読み上げ開始時など）でも呼べるよう、文字の位置・フォント・色を元に戻す
 static void draw_status(const char* s, uint16_t color) {
-  M5.Display.fillRect(0, 0, 320, 30, TFT_BLACK);
-  M5.Display.setFont(&fonts::efontJA_16);
-  M5.Display.setTextColor(color);
-  M5.Display.setCursor(4, 6);
-  M5.Display.print(s);
+  auto& d = M5.Display;
+  int32_t cx = d.getCursorX(), cy = d.getCursorY();
+  const lgfx::IFont* font = d.getFont();
+  auto style = d.getTextStyle();
+  d.fillRect(0, 0, 320, 30, TFT_BLACK);
+  d.setFont(&fonts::efontJA_16);
+  d.setTextColor(color);
+  d.setCursor(4, 6);
+  d.print(s);
+  d.setFont(font);
+  d.setTextStyle(style);
+  d.setCursor(cx, cy);
 }
 
 static void draw_meter(float lv) {
@@ -173,8 +181,11 @@ static void draw_heard(const char* heard, const char* kana) {
   M5.Display.setTextColor(TFT_WHITE);
 }
 
-static void on_piece(const char* piece, void*) {
+static void talk_feed(const char* piece, const float* next_logits);
+
+static void on_piece(const char* piece, const float* next_logits, void*) {
   if (M5.Display.getCursorY() < 200) M5.Display.print(piece);  // はみ出す分は表示しない（シリアルには全文）
+  talk_feed(piece, next_logits);
 }
 
 static void draw_footer(const char* feel, int asr_ms, int llm_ms, int tokens) {
@@ -214,6 +225,8 @@ static const Emotion FEEL_EMO[ZUNDA_N_FEEL] = {EMO_NEUTRAL, EMO_JOY,   EMO_JOY, 
 static const float EMO_RATE[EMO_COUNT] = {1.00f, 1.06f, 0.94f, 0.98f, 1.08f, 0.90f, 1.00f};
 static MoraTok seq[256];
 static int last_tts_ms = 0, last_audio_ms = 0;
+static char last_say[512];
+static Emotion last_emo = EMO_NEUTRAL;
 
 // 記法を合成して再生し終わるまで待つ。マイクは止めておくこと（Core2 は I2S を共有）
 static void speak_kana(const char* kana, Emotion emo) {
@@ -235,10 +248,145 @@ static void speak_kana(const char* kana, Emotion emo) {
   deaf_until = millis() + DEAF_MS;
 }
 
+// ---- 返事を作りながら読み上げる -------------------------------------------------
+// LLM の文字片を貯め、句読点（、。！？）が来たらそこまでを記法にして合成し、スピーカーの待ち行列に積む。
+// 再生は M5Unified のスピーカータスクが裏で行うので、その間も LLM は次の句を作り続けられる。
+// スピーカーの待ち行列は1チャンネル2枠なので、PCM は3枚の使い回し（再生中・待ち・合成中）。
+static constexpr int TALK_BUFS = 3;
+static constexpr size_t TALK_MAX = 16000 * 6;
+static constexpr size_t TALK_FORCE_CUT = 90;  // 句読点が来なくてもこのバイト数（ひらがな約30字）で区切る
+static int16_t* talk_buf[TALK_BUFS];
+static int talk_next = 0;
+static char talk_pending[400];
+static size_t talk_len = 0;
+static bool talk_on = false, talk_emo_fixed = false;
+static Emotion talk_emo = EMO_NEUTRAL;
+static uint32_t talk_t0 = 0;
+static int talk_first_ms = -1, talk_chunks = 0, talk_tts_ms = 0, talk_audio_ms = 0, talk_skip = 0, talk_missing = 0;
+
+static void talk_begin(Emotion emo, bool emo_fixed) {
+  talk_len = 0;
+  talk_pending[0] = 0;
+  last_say[0] = 0;
+  talk_emo = emo;
+  talk_emo_fixed = emo_fixed;
+  talk_t0 = millis();
+  talk_first_ms = -1;
+  talk_chunks = talk_tts_ms = talk_audio_ms = talk_skip = talk_missing = 0;
+  talk_on = tts_ok && talk_buf[TALK_BUFS - 1];
+  if (!talk_on) return;
+  M5.Speaker.begin();
+  M5.Speaker.setVolume(180);
+}
+
+// 句1つ（漢字かな交じり）を合成して待ち行列に積む
+static void talk_chunk(const char* text) {
+  static char kana[512];
+  int skipped = 0;
+  yomi_to_kana(text, kana, sizeof(kana), &skipped);
+  talk_skip += skipped;
+  if (!kana[0]) return;
+  if (last_say[0]) strlcat(last_say, "、", sizeof(last_say));
+  strlcat(last_say, kana, sizeof(last_say));
+  uint32_t t0 = millis();
+  size_t n = parse_kana(kana, seq, 256);
+  size_t len = tts.render(seq, n);
+  talk_tts_ms += (int)(millis() - t0);
+  talk_missing += tts.missing();
+  if (!len) return;
+  if (len > TALK_MAX) len = TALK_MAX;
+  float rate = EMO_RATE[talk_emo];
+  // 待ち行列が2枠とも埋まっていたら、1枠空くまで待つ（3枚目のバッファがまだ再生に使われていないことの保証）
+  while (M5.Speaker.isPlaying(0) >= 2) M5.delay(2);
+  int16_t* buf = talk_buf[talk_next];
+  talk_next = (talk_next + 1) % TALK_BUFS;
+  memcpy(buf, tts.pcm(), len * sizeof(int16_t));
+  M5.Speaker.playRaw(buf, len, (uint32_t)(tts.sampleRate() * rate), false, 1, 0, false);
+  if (talk_first_ms < 0) {
+    talk_first_ms = (int)(millis() - talk_t0);
+    draw_status("ずんだもんがしゃべってる", TFT_GREENYELLOW);
+  }
+  talk_chunks++;
+  talk_audio_ms += (int)(len * 1000 / (tts.sampleRate() * rate));
+}
+
+static bool is_punct_at(const char* s, size_t* n) {
+  static const char* const P[] = {"、", "。", "！", "？", "…", "!", "?", "\n"};
+  for (const char* p : P) {
+    size_t l = strlen(p);
+    if (strncmp(s, p, l) == 0) {
+      *n = l;
+      return true;
+    }
+  }
+  return false;
+}
+
+// 貯まった文字から、句読点で終わる句を順に読み上げる（final なら残りも全部）
+static void talk_flush(bool final) {
+  for (;;) {
+    size_t cut = 0;
+    for (size_t i = 0, n; i < talk_len; i++) {
+      if (is_punct_at(talk_pending + i, &n)) {
+        cut = i + n;
+        while (cut < talk_len && is_punct_at(talk_pending + cut, &n)) cut += n;  // 「！？」などはまとめる
+        break;
+      }
+    }
+    if (!cut && talk_len >= TALK_FORCE_CUT) {  // 長すぎる句は文字の切れ目で切る
+      cut = talk_len;
+      while (cut > 0 && (talk_pending[cut] & 0xC0) == 0x80) cut--;
+    }
+    if (!cut && final) cut = talk_len;
+    if (!cut) return;
+    char chunk[sizeof(talk_pending)];
+    memcpy(chunk, talk_pending, cut);
+    chunk[cut] = 0;
+    memmove(talk_pending, talk_pending + cut, talk_len - cut + 1);
+    talk_len -= cut;
+    talk_chunk(chunk);
+  }
+}
+
+static void talk_feed(const char* piece, const float* next_logits) {
+  if (!talk_on) return;
+  size_t l = strlen(piece);
+  if (talk_len + l < sizeof(talk_pending)) {
+    memcpy(talk_pending + talk_len, piece, l + 1);
+    talk_len += l;
+  }
+  // 声色は最初の句を喋る前に決める（その時点で返事が終わるとしたらどの気持ちか）。最後のタグとずれることがある
+  if (!talk_emo_fixed && next_logits) {
+    size_t dummy;
+    bool has_punct = false;
+    for (size_t i = 0; i < talk_len && !has_punct; i++) has_punct = is_punct_at(talk_pending + i, &dummy);
+    if (has_punct || talk_len >= TALK_FORCE_CUT) {
+      talk_emo = FEEL_EMO[zunda_feel_from_logits(next_logits)];
+      talk_emo_fixed = true;
+    }
+  }
+  talk_flush(false);
+}
+
+static void talk_end() {
+  if (!talk_on) return;
+  talk_flush(true);
+  while (M5.Speaker.isPlaying()) M5.delay(5);
+  M5.Speaker.end();
+  talk_on = false;
+  deaf_until = millis() + DEAF_MS;
+}
+
+// 文字列をまとめて読み上げる（ボタンB の読み直し用）
+static void talk_text(const char* text, Emotion emo) {
+  talk_begin(emo, true);
+  talk_feed(text, nullptr);
+  talk_end();
+}
+
 // ---- 返事を作る ---------------------------------------------------------------
 static char last_heard[320];
-static char last_say[512];
-static Emotion last_emo = EMO_NEUTRAL;
+static char last_reply[256];
 
 static void respond(const char* heard, const char* kana, const char* phrase, int asr_ms) {
   strlcpy(last_heard, heard, sizeof(last_heard));
@@ -247,16 +395,16 @@ static void respond(const char* heard, const char* kana, const char* phrase, int
   M5.Display.setTextColor(TFT_GREENYELLOW);
   M5.Display.print("ずんだもん：");
   M5.Display.setTextColor(TFT_WHITE);
-  char reply[256];
+  char* reply = last_reply;
   int feel = 0;
   uint32_t t0 = millis();
-  int tokens = zunda_brain_reply(&llm, heard, reply, sizeof(reply), &feel, on_piece, nullptr);
+  talk_begin(EMO_NEUTRAL, false);
+  int tokens = zunda_brain_reply(&llm, heard, reply, sizeof(last_reply), &feel, on_piece, nullptr);
   int llm_ms = (int)(millis() - t0);
   draw_footer(zunda_feel_name(feel), asr_ms, llm_ms, tokens);
-  int skipped = 0;
-  yomi_to_kana(reply, last_say, sizeof(last_say), &skipped);
-  last_emo = FEEL_EMO[feel];
-  speak_kana(last_say, last_emo);
+  talk_end();
+  int talk_total_ms = (int)(millis() - t0);
+  last_emo = talk_emo;
 
   Serial.print("{");
   json_str("heard", heard);
@@ -266,8 +414,11 @@ static void respond(const char* heard, const char* kana, const char* phrase, int
   json_str("reply", reply);
   json_str("feel", zunda_feel_name(feel));
   json_str("say", last_say);
-  Serial.printf("\"tts_ms\":%d,\"audio_ms\":%d,\"yomi_skip\":%d,\"tts_missing\":%d,", last_tts_ms, last_audio_ms,
-                skipped, tts_ok ? tts.missing() : -1);
+  json_str("voice", EMO_NAME[talk_emo]);
+  Serial.printf("\"first_sound_ms\":%d,\"chunks\":%d,\"tts_ms\":%d,\"audio_ms\":%d,\"done_ms\":%d,\"yomi_skip\":%d,"
+                "\"tts_missing\":%d,",
+                talk_first_ms, talk_chunks, talk_tts_ms, talk_audio_ms, talk_total_ms, talk_skip,
+                tts_ok ? talk_missing : -1);
   Serial.printf("\"llm_ms\":%d,\"tokens\":%d,\"temp\":%.1f,\"free_internal\":%u,\"free_psram\":%u}\n", llm_ms,
                 tokens, llm.temperature, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
@@ -470,6 +621,8 @@ void setup() {
   const esp_partition_t* bank =
       esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x40, "zbank");
   tts_ok = bank && tts.begin(bank);
+  if (tts_ok)
+    for (int i = 0; i < TALK_BUFS; i++) talk_buf[i] = (int16_t*)asr_alloc(TALK_MAX * sizeof(int16_t), 0);
   if (!tts_ok) Serial.println("{\"warn\":\"音声バンクがありません（tools/flash_voice.sh）。画面表示だけで動きます\"}");
   llm.rng = ((unsigned long long)esp_random() << 32) | esp_random();
 
@@ -506,9 +659,9 @@ void loop() {
     calib_n = 0;
     draw_status("まわりの音をはかってるよ…", TFT_YELLOW);
   }
-  if (M5.BtnB.wasClicked() && last_say[0] && st != St::Speech) {
+  if (M5.BtnB.wasClicked() && last_reply[0] && st != St::Speech) {
     mic_stop();
-    speak_kana(last_say, last_emo);
+    talk_text(last_reply, last_emo);
     back_to_listening();
   }
   if (M5.BtnC.wasClicked() && last_heard[0] && st != St::Speech) {

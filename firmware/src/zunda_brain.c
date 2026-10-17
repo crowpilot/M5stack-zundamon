@@ -37,7 +37,7 @@ static int feel_of(int token) {
     return -1;
 }
 
-static int best_feel(const float *logits) {
+int zunda_feel_from_logits(const float *logits) {
     int best = 0;
     for (int i = 1; i < ZUNDA_N_FEEL; i++)
         if (feel_id[i] >= 0 && (feel_id[best] < 0 || logits[feel_id[i]] > logits[feel_id[best]])) best = i;
@@ -51,8 +51,8 @@ static int argmax(const float *x, int n) {
     return b;
 }
 
-int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *feel,
-                      void (*on_piece)(const char *piece, void *ctx), void *ctx) {
+int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *feel, zunda_piece_fn on_piece,
+                      void *ctx) {
     static char prompt[400];
     static int toks[sizeof(prompt) + 3];
     // 長すぎる話しかけは切る（返事の分のKVキャッシュを残す）
@@ -86,10 +86,10 @@ int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *f
             memcpy(out + len, piece, pl + 1);
             len += pl;
         }
-        if (on_piece) on_piece(piece, ctx);
         logits = llm_forward(m, next, pos++);
+        if (on_piece) on_piece(piece, logits, ctx);
         prev = next;
     }
-    if (*feel < 0) *feel = best_feel(logits);
+    if (*feel < 0) *feel = zunda_feel_from_logits(logits);
     return steps;
 }

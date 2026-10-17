@@ -49,5 +49,5 @@ class UnitTTS {
   uint8_t* env_ = nullptr;
   size_t envLen_ = 0;
   static const size_t MAX_UNIT = 16000;      // 1単位最大1秒
-  static const size_t MAX_OUT = 16000 * 12;  // 1発話最大12秒
+  static const size_t MAX_OUT = 16000 * 6;   // 1回の合成は最大6秒（句ごとに合成するので足りる。PSRAM 節約）
 };
