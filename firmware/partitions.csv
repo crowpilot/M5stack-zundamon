@@ -1,0 +1,5 @@
+# Core2 16MB: アプリ 4.5MB（OTAなし）＋ 音声バンク zbank 約11.4MB（voice/bank_mu.bin を tools/flash_voice.sh で 0x490000 に書く）
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x5000,
+factory,  app,  factory, 0x10000,  0x480000,
+zbank,    data, 0x40,    0x490000, 0xB70000,

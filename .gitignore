@@ -1,0 +1,15 @@
+# ビルド
+.pio/
+firmware/.pio/
+dist/
+__pycache__/
+*.o
+# 生成物（firmware/gen_headers.py が models/ から作る）
+firmware/src/asr_model_data.h
+firmware/src/llm_model_data.h
+# 音声バンクは大きいので git に入れず GitHub Releases に添付する
+voice/*.bin
+# 秘密情報（今は使っていないが、Wi-Fi 等を足すときはここに）
+secrets.h
+*.env
+.env
