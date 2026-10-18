@@ -1,0 +1,10 @@
+Baseline commit: f7d6a0c3acb81ccc94068ff96f109d3e6bbcf317
+Command: python3 tools/llm/check_prefill.py
+ASan + UBSan; host float traces, not ESP32 timing.
+
+prefill logits/KV: bitwise equal; cache lifetime and fallback: passed
+reply/callback logits/RNG equal: steps=256, temp=0, replies=72, sha256=9a41107d2451a2c5088c4b51ab80cb31613108a0a00ff8dae540d70acddae206
+reply/callback logits/RNG equal: steps=256, temp=0.8, replies=72, sha256=feaed011ec9577a87bb1d1528c907f2dd84ce5bcb13f1e57f898491777314de0
+reply/callback logits/RNG equal: steps=64, temp=0, replies=72, sha256=85787b7aa56d1210c6f71641fc27d683ac83e26ce51a5c5a0f1750c7dd7d7b83
+reply/callback logits/RNG equal: steps=64, temp=0.8, replies=72, sha256=c57469de75aa1f5adb492b9fcc9bfab6ae2397862fa7c5a584b40d4e786bccc6
+All equivalence and cache checks passed (ASan + UBSan).

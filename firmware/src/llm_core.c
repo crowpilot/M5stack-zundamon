@@ -220,7 +220,8 @@ static void embed(Llm *m, float *x, int token) {
     for (int j = 0; j < dim; j++) x[j] = e.q[off + j] * e.s[(off + j) / m->gs];
 }
 
-float *llm_forward(Llm *m, int token, int pos) {
+static float *forward(Llm *m, int token, int pos, int need_logits) {
+    if (pos < 2) m->prefix_len = 0;
     LlmConfig *p = &m->config;
     LlmWeights *w = &m->weights;
     LlmState *s = &m->state;
@@ -290,9 +291,34 @@ float *llm_forward(Llm *m, int token, int pos) {
         matmul(m, s->xb, s->hb, w->w2[l], hidden_dim, dim);
         for (int i = 0; i < dim; i++) x[i] += s->xb[i];
     }
+    // 次の位置はembedから始まるため、最終RMS/分類層の結果は引き継がれない。
+    if (!need_logits) return NULL;
     rmsnorm(x, x, w->rms_final, dim);
     matmul(m, s->logits, x, w->wcls, p->dim, p->vocab_size);
     return s->logits;
+}
+
+float *llm_forward(Llm *m, int token, int pos) {
+    return forward(m, token, pos, 1);
+}
+
+float *llm_prefill(Llm *m, const int *tokens, int n, int *reused) {
+    if (reused) *reused = 0;
+    if (!tokens || n < 1 || n > m->max_steps) return NULL;
+    for (int i = 0; i < n; i++)
+        if (tokens[i] < 0 || tokens[i] >= m->config.vocab_size) return NULL;
+    // 最後の位置は必ず計算する。短いプロンプトで古いlogitsを返さない。
+    int start = n > 2 && m->prefix_len == 2 &&
+                tokens[0] == m->prefix_tokens[0] && tokens[1] == m->prefix_tokens[1] ? 2 : 0;
+    float *logits = NULL;
+    for (int pos = start; pos < n; pos++)
+        logits = forward(m, tokens[pos], pos, pos == n - 1);
+    if (n >= 2) {
+        memcpy(m->prefix_tokens, tokens, sizeof(m->prefix_tokens));
+        m->prefix_len = 2;
+    }
+    if (reused) *reused = start;
+    return logits;
 }
 
 // ---------------------------------------------------------------- tokenizer

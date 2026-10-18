@@ -1,0 +1,19 @@
+{
+  "baseline-complete": {
+    "ready": true,
+    "version": "0.0.3",
+    "tts": true,
+    "llm": "zunda-small-tagend-679",
+    "free_internal": 136408,
+    "free_psram": 571167
+  },
+  "trial": {
+    "ready": true,
+    "version": "0.0.3-s1",
+    "fast_prefill": true,
+    "tts": true,
+    "llm": "zunda-small-tagend-679",
+    "free_internal": 136400,
+    "free_psram": 562959
+  }
+}

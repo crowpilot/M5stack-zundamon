@@ -5,7 +5,7 @@
 //   zunda_brain_reply(&llm, "こんにちは。", reply, sizeof(reply), &feel, on_piece, ctx);
 //   → reply = "こんにちは！ボクもだいすきなのだ！"、zunda_feel_name(feel) = "うれしい"
 //
-// 会話の形: <BOS>Ａ：{話しかけ}Ｂ：{返事}〈気持ち〉。毎回 KV キャッシュを最初から使う（1往復ずつ。学習と同じ形）
+// 会話の形: <BOS>Ａ：{話しかけ}Ｂ：{返事}〈気持ち〉。1往復ずつ。固定先頭以外のKVは毎回計算する。
 // 生成は m->temperature が0なら greedy、>0ならサンプリング。タグか止める条件（Ａ：/Ｂ：/BOS/EOS）が出た位置、または48トークン目で、
 // その位置の logits をタグ8個だけに絞って最大のものを気持ちにする（資料の手順どおり。必ずタグ1つ）
 #pragma once
@@ -17,8 +17,12 @@ extern "C" {
 
 #define ZUNDA_N_FEEL 8
 #define ZUNDA_MAX_REPLY 48
+#ifndef ZUNDA_FAST_PREFILL
+#define ZUNDA_FAST_PREFILL 1
+#endif
 
-// タグ・話者マーカーのトークン番号を語彙の文字列から引く。0=成功、負=見つからない（タグなしモデルなど）
+// タグ・話者マーカーを語彙から引き、固定先頭のKVを準備する（FAST_PREFILL時）。
+// 0=成功、負=見つからない（タグなしモデルなど）
 int zunda_brain_init(Llm *m);
 
 // 返事を1つ作る。on_piece は1トークンごとに、表示用の文字片と「次の位置の logits」で呼ばれる（NULL可）
@@ -31,7 +35,8 @@ int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *f
 int zunda_feel_from_logits(const float *logits);
 
 const char *zunda_feel_name(int feel);
-int zunda_brain_last_prompt_tokens(void);  // 直前の返事で読み込ませた話しかけのトークン数（BOS・Ａ：・Ｂ：込み）  // "ふつう" など（範囲外は "?"）
+int zunda_brain_last_prompt_tokens(void);  // BOS・Ａ：・Ｂ：込み
+int zunda_brain_last_cached_prompt_tokens(void);  // 固定先頭のKVを再利用した数
 
 #ifdef __cplusplus
 }

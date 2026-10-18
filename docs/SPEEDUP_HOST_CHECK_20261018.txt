@@ -1,0 +1,59 @@
+M5Stackずんだもん 高速化案のホスト確認
+日時: 2026-10-18 JST
+対象: v0.0.3 / f7d6a0c3acb81ccc94068ff96f109d3e6bbcf317
+モデルSHA256: c3cec8fb03fc763fdbddca05c22722aa6539e17ad2f84f96fc5978b28dc331b0
+語彙SHA256: 32a178819cebd20603cbdc6a4f370d4e5f313e4e1b543d9c4801b2ead3c3ead2
+
+方法:
+- 実装ファイルを一時ディレクトリへコピーし、検証用のforward呼び出しカウンタと、
+  最終RMSNorm/分類を省略するフラグだけを追加。元のファームウェアは無変更。
+- 独立したLlm状態を2個作り、元経路と固定2トークンのKV再利用＋途中分類省略を比較。
+- 各プロンプト末尾の全logitsと、その位置までの全層K/Vをmemcmpで比較。
+- 続くgreedy生成も同じトークンおよびlogitsを比較し、タグ/終了トークンまで確認。
+- 複数入力間で状態を使い回し、再利用側は起動時相当のprefix KVを各回復元。
+- 元のzunda_brain_replyへコールバックを付け、最初の通知までのforward回数と
+  最初に句読点が出る生成トークン位置を記録。
+- AppleのホストCコンパイラ、-O2。同じホスト内の計算一致であり、ESP32の速度や
+  PCとESP32の浮動小数点一致を測ったものではない。
+
+再現用の一時実験ファイル:
+/tmp/m5-zunda-speedup-20261018/probe.c
+/tmp/m5-zunda-speedup-20261018/probe_core.c
+/tmp/m5-zunda-speedup-20261018/inputs.h
+この一時領域のファイルは永続性を保証しない。上記の検証方法と以下の結果を保存する。
+
+結果:
+prefix_tokens=2 ids=1,3, saved_KV_bytes=4608
+こんにちは	N=8	first_cb_forward=9	first_punct_piece=6	reply_steps=10	match=bitwise	こんにちは、とってもかわいいのだ！〈ふつう〉
+おはようございます	N=11	first_cb_forward=12	first_punct_piece=6	reply_steps=12	match=bitwise	おはよーなのだ！ボクもお手伝いするのだ！〈ふつう〉
+今日はいい天気ですね	N=12	first_cb_forward=13	first_punct_piece=2	reply_steps=10	match=bitwise	ボクも、お腹が空いてきたのだ！〈ふつう〉
+ずんだもんなのだ	N=5	first_cb_forward=6	first_punct_piece=8	reply_steps=8	match=bitwise	お腹が空いてきたのだ！〈ふつう〉
+ずんだもん	N=4	first_cb_forward=5	first_punct_piece=4	reply_steps=9	match=bitwise	おはよ！ボクは天才なのだ！〈ドヤ〉
+東京は朝から晴れています	N=17	first_cb_forward=18	first_punct_piece=2	reply_steps=10	match=bitwise	ボクも、お腹が空いてきたのだ！〈ふつう〉
+おやすみなさい	N=6	first_cb_forward=7	first_punct_piece=3	reply_steps=7	match=bitwise	あしたは、ゆっくり休むのだ！〈ふつう〉
+ありがとう	N=8	first_cb_forward=9	first_punct_piece=2	reply_steps=7	match=bitwise	あ、とってもきれいな色なのだ！〈うれしい〉
+元気ですか	N=8	first_cb_forward=9	first_punct_piece=2	reply_steps=10	match=bitwise	ボクも、お腹が空いてきたのだ！〈ふつう〉
+何してるの	N=6	first_cb_forward=7	first_punct_piece=2	reply_steps=9	match=bitwise	ボクは、ずんだ餅を食べてるのだ！〈ふつう〉
+ずんだもちが食べたい	N=8	first_cb_forward=9	first_punct_piece=3	reply_steps=11	match=bitwise	ボクもいっしょに、お腹が空いてきたのだ！〈ふつう〉
+今何時	N=6	first_cb_forward=7	first_punct_piece=6	reply_steps=6	match=bitwise	なにをしているのだ？〈ふつう〉
+天気を教えて	N=7	first_cb_forward=8	first_punct_piece=2	reply_steps=12	match=bitwise	ボクが、かっこいいときは、ボクが教えてあげるのだ！〈ドヤ〉
+おはよう	N=6	first_cb_forward=7	first_punct_piece=5	reply_steps=5	match=bitwise	おはようなのだ！〈ふつう〉
+こんばんは	N=8	first_cb_forward=9	first_punct_piece=6	reply_steps=11	match=bitwise	こんにちは！ボクは天才なのだ！〈ドヤ〉
+おやすみ	N=4	first_cb_forward=5	first_punct_piece=3	reply_steps=7	match=bitwise	あしたは、ゆっくり休むのだ！〈ふつう〉
+ずんだもち	N=5	first_cb_forward=6	first_punct_piece=9	reply_steps=9	match=bitwise	お腹が空いてきちゃったのだ！〈ふつう〉
+かわいい	N=5	first_cb_forward=6	first_punct_piece=2	reply_steps=10	match=bitwise	ボクも、お腹が空いてきたのだ！〈ふつう〉
+すごい	N=4	first_cb_forward=5	first_punct_piece=2	reply_steps=9	match=bitwise	な、なでなでてほしいのだ！〈うれしい〉
+あそぼう	N=5	first_cb_forward=6	first_punct_piece=2	reply_steps=6	match=bitwise	いいのだ！ボクも一緒に行くのだ！〈うれしい〉
+だいすき	N=5	first_cb_forward=6	first_punct_piece=2	reply_steps=10	match=bitwise	ボクも、お腹が空いてきたのだ！〈うれしい〉
+ばいばい	N=7	first_cb_forward=8	first_punct_piece=4	reply_steps=9	match=bitwise	かばん、ボクも一緒に探すのだ！〈ふつう〉
+ばか	N=5	first_cb_forward=6	first_punct_piece=8	reply_steps=13	match=bitwise	かばんをかぶつを、ボクにも見せてほしいのだ！〈ふつう〉
+おなかすいた	N=7	first_cb_forward=8	first_punct_piece=6	reply_steps=6	match=bitwise	ボクも一緒に食べに行きたいのだ！〈うれしい〉
+はじめまして	N=8	first_cb_forward=9	first_punct_piece=2	reply_steps=9	match=bitwise	ボクは、ずんだが一番好きなのだ！〈ふつう〉
+ただいま	N=6	first_cb_forward=7	first_punct_piece=2	reply_steps=10	match=bitwise	ボクも、お腹が空いてきたのだ！〈ふつう〉
+おかえり	N=7	first_cb_forward=8	first_punct_piece=5	reply_steps=10	match=bitwise	おつきさま、ボクも連れていくのだ！〈うれしい〉
+いってきます	N=8	first_cb_forward=9	first_punct_piece=4	reply_steps=8	match=bitwise	いすが、とってもかわいいのだ！〈うれしい〉
+いってらっしゃい	N=9	first_cb_forward=10	first_punct_piece=4	reply_steps=8	match=bitwise	いすが、とってもかわいいのだ！〈うれしい〉
+こんにちは。	N=9	first_cb_forward=10	first_punct_piece=6	reply_steps=11	match=bitwise	こんにちは！ボクもだいすきなのだ！〈うれしい〉
+上司が厳しくて困ってる	N=15	first_cb_forward=16	first_punct_piece=2	reply_steps=7	match=bitwise	ボクが、ボクが手伝ってあげるのだ！〈ドヤ〉
+テストで100点とったよ！	N=16	first_cb_forward=17	first_punct_piece=2	reply_steps=8	match=bitwise	ボクも、とっても楽しみなのだ！〈うれしい〉
+failures=0

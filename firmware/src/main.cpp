@@ -419,6 +419,7 @@ static void respond(const char* heard, const char* kana, const char* phrase, int
   json_str("say", last_say);
   json_str("voice", EMO_NAME[talk_emo]);
   Serial.printf("\"prompt_tokens\":%d,\"first_piece_ms\":%d,", zunda_brain_last_prompt_tokens(), talk_first_piece_ms);
+  Serial.printf("\"cached_prompt_tokens\":%d,", zunda_brain_last_cached_prompt_tokens());
   Serial.printf("\"first_sound_ms\":%d,\"chunks\":%d,\"tts_ms\":%d,\"audio_ms\":%d,\"done_ms\":%d,\"yomi_skip\":%d,"
                 "\"tts_missing\":%d,",
                 talk_first_ms, talk_chunks, talk_tts_ms, talk_audio_ms, talk_total_ms, talk_skip,
@@ -630,7 +631,7 @@ void setup() {
   if (!tts_ok) Serial.println("{\"warn\":\"音声バンクがありません（tools/flash_voice.sh）。画面表示だけで動きます\"}");
   llm.rng = ((unsigned long long)esp_random() << 32) | esp_random();
 
-  Serial.printf("{\"ready\":true,\"version\":\"" ZUNDA_VERSION "\",\"tts\":%s,\"llm\":\"%s\",\"free_internal\":%u,\"free_psram\":%u}\n", tts_ok ? "true" : "false", MODEL_NAME,
+  Serial.printf("{\"ready\":true,\"version\":\"" ZUNDA_VERSION "\",\"fast_prefill\":%s,\"tts\":%s,\"llm\":\"%s\",\"free_internal\":%u,\"free_psram\":%u}\n", ZUNDA_FAST_PREFILL ? "true" : "false", tts_ok ? "true" : "false", MODEL_NAME,
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 

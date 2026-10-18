@@ -9,8 +9,10 @@ static const char *const kFeel[ZUNDA_N_FEEL] = {
 static int feel_id[ZUNDA_N_FEEL];
 static int id_a = -1, id_b = -1;
 static int last_prompt_tokens = 0;
+static int last_cached_prompt_tokens = 0;
 
 int zunda_brain_last_prompt_tokens(void) { return last_prompt_tokens; }
+int zunda_brain_last_cached_prompt_tokens(void) { return last_cached_prompt_tokens; }
 
 static int find_piece(Llm *m, const char *s) {
     for (int i = 0; i < m->tok.vocab_size; i++)
@@ -29,6 +31,15 @@ int zunda_brain_init(Llm *m) {
     id_a = find_piece(m, "Ａ：");
     id_b = find_piece(m, "Ｂ：");
     if (id_a < 0 || id_b < 0) ok = -2;
+#if ZUNDA_FAST_PREFILL
+    if (ok == 0) {
+        // 語彙差し替えに備えて番号を決め打ちしない。実プロンプトでも一致を確認する。
+        const char prefix[] = "Ａ：";
+        int tokens[sizeof(prefix) + 3], n;
+        llm_encode(m, prefix, 1, 0, tokens, &n);
+        if (!llm_prefill(m, tokens, n, NULL)) return -3;
+    }
+#endif
     return ok;
 }
 
@@ -68,9 +79,14 @@ int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *f
         n = limit;
     }
     last_prompt_tokens = n;
+    last_cached_prompt_tokens = 0;
     float *logits = NULL;
-    int pos = 0;
-    for (int i = 0; i < n; i++) logits = llm_forward(m, toks[i], pos++);
+#if ZUNDA_FAST_PREFILL
+    logits = llm_prefill(m, toks, n, &last_cached_prompt_tokens);
+#else
+    for (int i = 0; i < n; i++) logits = llm_forward(m, toks[i], i);
+#endif
+    int pos = n;
 
     int prev = toks[n - 1], len = 0, steps = 0;
     out[0] = 0;

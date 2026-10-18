@@ -1,0 +1,316 @@
+{
+  "content_equal": true,
+  "responses_per_version": 15,
+  "prompts": [
+    {
+      "heard": "おはよう",
+      "samples_per_version": 3,
+      "metrics": {
+        "first_piece_ms": {
+          "before_median": 873,
+          "after_median": 566,
+          "saved_ms": 307,
+          "reduction_percent": 35.17,
+          "before_range": [
+            873,
+            878
+          ],
+          "after_range": [
+            566,
+            567
+          ]
+        },
+        "first_sound_ms": {
+          "before_median": 1427,
+          "after_median": 1110,
+          "saved_ms": 317,
+          "reduction_percent": 22.21,
+          "before_range": [
+            1427,
+            1433
+          ],
+          "after_range": [
+            1110,
+            1111
+          ]
+        },
+        "llm_ms": {
+          "before_median": 1434,
+          "after_median": 1117,
+          "saved_ms": 317,
+          "reduction_percent": 22.11,
+          "before_range": [
+            1434,
+            1439
+          ],
+          "after_range": [
+            1117,
+            1117
+          ]
+        },
+        "done_ms": {
+          "before_median": 2759,
+          "after_median": 2445,
+          "saved_ms": 314,
+          "reduction_percent": 11.38,
+          "before_range": [
+            2759,
+            2764
+          ],
+          "after_range": [
+            2445,
+            2445
+          ]
+        }
+      }
+    },
+    {
+      "heard": "こんにちは。",
+      "samples_per_version": 3,
+      "metrics": {
+        "first_piece_ms": {
+          "before_median": 1251,
+          "after_median": 890,
+          "saved_ms": 361,
+          "reduction_percent": 28.86,
+          "before_range": [
+            1250,
+            1251
+          ],
+          "after_range": [
+            890,
+            890
+          ]
+        },
+        "first_sound_ms": {
+          "before_median": 1927,
+          "after_median": 1555,
+          "saved_ms": 372,
+          "reduction_percent": 19.3,
+          "before_range": [
+            1927,
+            1927
+          ],
+          "after_range": [
+            1555,
+            1555
+          ]
+        },
+        "llm_ms": {
+          "before_median": 2651,
+          "after_median": 2265,
+          "saved_ms": 386,
+          "reduction_percent": 14.56,
+          "before_range": [
+            2649,
+            2651
+          ],
+          "after_range": [
+            2265,
+            2265
+          ]
+        },
+        "done_ms": {
+          "before_median": 5010,
+          "after_median": 4636,
+          "saved_ms": 374,
+          "reduction_percent": 7.47,
+          "before_range": [
+            5010,
+            5010
+          ],
+          "after_range": [
+            4636,
+            4636
+          ]
+        }
+      }
+    },
+    {
+      "heard": "今日はいい天気ですね",
+      "samples_per_version": 3,
+      "metrics": {
+        "first_piece_ms": {
+          "before_median": 1633,
+          "after_median": 1217,
+          "saved_ms": 416,
+          "reduction_percent": 25.47,
+          "before_range": [
+            1633,
+            1633
+          ],
+          "after_range": [
+            1217,
+            1217
+          ]
+        },
+        "first_sound_ms": {
+          "before_median": 1787,
+          "after_median": 1369,
+          "saved_ms": 418,
+          "reduction_percent": 23.39,
+          "before_range": [
+            1787,
+            1787
+          ],
+          "after_range": [
+            1368,
+            1369
+          ]
+        },
+        "llm_ms": {
+          "before_median": 2903,
+          "after_median": 2465,
+          "saved_ms": 438,
+          "reduction_percent": 15.09,
+          "before_range": [
+            2903,
+            2903
+          ],
+          "after_range": [
+            2464,
+            2465
+          ]
+        },
+        "done_ms": {
+          "before_median": 4957,
+          "after_median": 4514,
+          "saved_ms": 443,
+          "reduction_percent": 8.94,
+          "before_range": [
+            4957,
+            4957
+          ],
+          "after_range": [
+            4514,
+            4514
+          ]
+        }
+      }
+    },
+    {
+      "heard": "上司が厳しくて困ってる",
+      "samples_per_version": 3,
+      "metrics": {
+        "first_piece_ms": {
+          "before_median": 2017,
+          "after_median": 1545,
+          "saved_ms": 472,
+          "reduction_percent": 23.4,
+          "before_range": [
+            2017,
+            2017
+          ],
+          "after_range": [
+            1545,
+            1545
+          ]
+        },
+        "first_sound_ms": {
+          "before_median": 2172,
+          "after_median": 1698,
+          "saved_ms": 474,
+          "reduction_percent": 21.82,
+          "before_range": [
+            2172,
+            2172
+          ],
+          "after_range": [
+            1698,
+            1698
+          ]
+        },
+        "llm_ms": {
+          "before_median": 2913,
+          "after_median": 2428,
+          "saved_ms": 485,
+          "reduction_percent": 16.65,
+          "before_range": [
+            2913,
+            2914
+          ],
+          "after_range": [
+            2428,
+            2428
+          ]
+        },
+        "done_ms": {
+          "before_median": 5485,
+          "after_median": 5009,
+          "saved_ms": 476,
+          "reduction_percent": 8.68,
+          "before_range": [
+            5485,
+            5485
+          ],
+          "after_range": [
+            5009,
+            5009
+          ]
+        }
+      }
+    },
+    {
+      "heard": "テストで100点とったよ！",
+      "samples_per_version": 3,
+      "metrics": {
+        "first_piece_ms": {
+          "before_median": 2144,
+          "after_median": 1655,
+          "saved_ms": 489,
+          "reduction_percent": 22.81,
+          "before_range": [
+            2144,
+            2144
+          ],
+          "after_range": [
+            1655,
+            1655
+          ]
+        },
+        "first_sound_ms": {
+          "before_median": 2299,
+          "after_median": 1808,
+          "saved_ms": 491,
+          "reduction_percent": 21.36,
+          "before_range": [
+            2299,
+            2299
+          ],
+          "after_range": [
+            1808,
+            1808
+          ]
+        },
+        "llm_ms": {
+          "before_median": 3166,
+          "after_median": 2659,
+          "saved_ms": 507,
+          "reduction_percent": 16.01,
+          "before_range": [
+            3166,
+            3167
+          ],
+          "after_range": [
+            2659,
+            2659
+          ]
+        },
+        "done_ms": {
+          "before_median": 5431,
+          "after_median": 4924,
+          "saved_ms": 507,
+          "reduction_percent": 9.34,
+          "before_range": [
+            5431,
+            5436
+          ],
+          "after_range": [
+            4924,
+            4924
+          ]
+        }
+      }
+    }
+  ]
+}

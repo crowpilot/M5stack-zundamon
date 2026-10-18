@@ -50,6 +50,8 @@ typedef struct {
     float temperature, topp;
     unsigned long long rng;
     LlmProbIndex *probindex;
+    // 既存KVの位置0,1を再利用する。llm_init/先頭へのllm_forwardで無効になる。
+    int prefix_tokens[2], prefix_len;
 } Llm;
 
 // メモリ確保関数を差し替え可能に（ESP32ではPSRAMを使う）
@@ -63,6 +65,11 @@ int llm_init(Llm *m, const void *model, size_t model_len,
              const void *tok, size_t tok_len, int max_steps, llm_alloc_fn alloc);
 
 float *llm_forward(Llm *m, int token, int pos);
+// 位置0からのプロンプト。中間位置の分類層を省き、最後のlogitsを返す。
+// 同じ先頭2トークンのKVが残っていれば再利用する（追加KV領域なし）。
+// reused は省いたトークン数（NULL可）。nは1..max_steps、不正な入力はNULL。
+// 重み・KVを直接書き換える場合は事前に prefix_len=0 にすること。
+float *llm_prefill(Llm *m, const int *tokens, int n, int *reused);
 int llm_sample(Llm *m, float *logits);
 const char *llm_decode(Llm *m, int prev_token, int token);
 // text を BOS付きでトークン化。tokens は strlen(text)+3 以上の長さが必要
