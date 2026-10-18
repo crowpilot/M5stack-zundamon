@@ -22,6 +22,28 @@ typedef void* (*asr_alloc_fn)(size_t bytes, int fast);
 // 戻り値: 0=成功, 負=失敗（asr_error()で理由）
 int asr_init(const void* blob, size_t blob_bytes, int max_samples, asr_alloc_fn alloc);
 
+// 大きな作業領域だけを呼出側の4バイト境界arenaへ配置する任意の初期化方法。
+// bytesは同じblob/max_samplesでasr_scratch_bytesが返す値以上。小さな内部RAM用領域はallocを使う。
+// arenaは認識～asr_match完了までASRが専有する。他処理に貸す前にasr_release_scratchを呼ぶ。
+size_t asr_scratch_bytes(const void* blob, size_t blob_bytes, int max_samples);
+int asr_init_with_scratch(const void* blob, size_t blob_bytes, int max_samples, asr_alloc_fn alloc,
+                          void* scratch, size_t scratch_bytes);
+void asr_release_scratch(void);
+
+// 0は従来の計算。独立した比較用スイッチであり、推論中に変更しないこと。
+enum { ASR_OPT_SKIP_UNUSED_CONFIDENCE = 1u, ASR_OPT_RAW_MATCH = 2u };
+void asr_set_options(unsigned options);
+unsigned asr_options(void);
+
+// 録音中のFFT/log-mel先行計算。同じPCMバッファへ末尾追加だけを行い、長さを増やしてpushする。
+// 認識APIは完成フレームを再利用し、従来通り発話全体でCMVNを実行する（1回だけ再利用可）。
+// 最後のtail切捨ては可。PCMの既存部分を変更した場合はresetしてやり直す。
+// 全ASR APIは単一instance: pushと認識/照合を別タスクから並行実行してはいけない。
+void asr_frontend_begin(const int16_t* pcm);
+int asr_frontend_push(int n_samples);  // 戻り値は今回追加計算したフレーム数、負は失敗
+void asr_frontend_reset(void);
+int asr_frontend_reused_frames(void);  // 直前の認識で再利用したフレーム数
+
 // 16kHz mono int16 → ひらがな（UTF-8）。confidence は 0〜1 の目安。
 // 戻り値: 出力した文字数（0=何も認識せず）, 負=失敗
 int asr_recognize(const int16_t* pcm, int n_samples, char* out, int out_size, float* confidence);

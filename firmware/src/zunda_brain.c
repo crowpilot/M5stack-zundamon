@@ -65,10 +65,8 @@ static int argmax(const float *x, int n) {
     return b;
 }
 
-int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *feel, zunda_piece_fn on_piece,
-                      void *ctx) {
+static int encode_prompt(Llm *m, const char *heard, int *toks) {
     static char prompt[400];
-    static int toks[sizeof(prompt) + 3];
     // 長すぎる話しかけは切る（返事の分のKVキャッシュを残す）
     snprintf(prompt, sizeof(prompt), "Ａ：%.300sＢ：", heard);
     int n = 0;
@@ -78,6 +76,10 @@ int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *f
         toks[limit - 1] = toks[n - 1];
         n = limit;
     }
+    return n;
+}
+
+static float *prefill_prompt(Llm *m, const int *toks, int n) {
     last_prompt_tokens = n;
     last_cached_prompt_tokens = 0;
     float *logits = NULL;
@@ -86,6 +88,38 @@ int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *f
 #else
     for (int i = 0; i < n; i++) logits = llm_forward(m, toks[i], i);
 #endif
+    return logits;
+}
+
+float *zunda_brain_prefill_prompt(Llm *m, const char *heard, int *n_tokens) {
+    int toks[403];
+    int n = encode_prompt(m, heard, toks);
+    if (n_tokens) *n_tokens = n;
+    return prefill_prompt(m, toks, n);
+}
+
+size_t zunda_brain_prompt_snapshot_size(Llm *m, const char *heard, int skip_prefix) {
+    int toks[403];
+    return llm_prompt_snapshot_size(m, encode_prompt(m, heard, toks), skip_prefix);
+}
+
+int zunda_brain_export_prompt(Llm *m, const char *heard, int skip_prefix,
+                              const unsigned char identity[32], llm_snapshot_write_fn writer, void *ctx) {
+    int toks[403];
+    int n = encode_prompt(m, heard, toks);
+    return llm_prompt_snapshot_export(m, toks, n, skip_prefix, identity, writer, ctx);
+}
+
+int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *feel, zunda_piece_fn on_piece,
+                      void *ctx) {
+    return zunda_brain_reply_ex(m, heard, out, out_size, feel, NULL, on_piece, ctx);
+}
+
+int zunda_brain_reply_ex(Llm *m, const char *heard, char *out, int out_size, int *feel,
+                        zunda_prepare_fn on_prepare, zunda_piece_fn on_piece, void *ctx) {
+    static int toks[403];
+    int n = encode_prompt(m, heard, toks);
+    float *logits = prefill_prompt(m, toks, n);
     int pos = n;
 
     int prev = toks[n - 1], len = 0, steps = 0;
@@ -106,6 +140,7 @@ int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *f
             memcpy(out + len, piece, pl + 1);
             len += pl;
         }
+        if (on_prepare) on_prepare(piece, ctx);
         logits = llm_forward(m, next, pos++);
         if (on_piece) on_piece(piece, logits, ctx);
         prev = next;

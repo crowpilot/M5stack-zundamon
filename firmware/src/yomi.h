@@ -12,6 +12,12 @@ extern "C" {
 #endif
 // 戻り値: 書いたバイト数。skipped には読めずに飛ばした文字数（NULL可）
 size_t yomi_to_kana(const char* text, char* out, size_t cap, int* skipped);
+// Experimental streaming boundary, in source UTF-8 bytes. Returns zero if no
+// prefix of at least minimum_moras has a stable reading. Keeps an unfinished
+// dictionary match / UTF-8 character / possible small-kana combination pending.
+// This guarantees reading only: ending a TTS chunk here changes final pitch and
+// VCV closure. It is NOT permission to claim bit-identical early speech.
+size_t yomi_stable_prefix(const char* text, size_t minimum_moras);
 #ifdef __cplusplus
 }
 #endif

@@ -122,3 +122,49 @@ size_t yomi_to_kana(const char* text, char* out, size_t cap, int* skipped) {
   if (skipped) *skipped = skip;
   return b.len;
 }
+
+size_t yomi_stable_prefix(const char* text, size_t minimum_moras) {
+  if (!text) return 0;
+  const char* s = text;
+  const char* end = text + strlen(text);
+  size_t moras = 0, stable = 0;
+  while (s < end) {
+    int hit = -1;
+    size_t remaining = (size_t)(end - s);
+    for (int i = 0; i < YOMI_N; i++) {
+      size_t n = strlen(YOMI_SURF[i]);
+      // A longer word may still change the pronunciation at this position.
+      if (remaining < n && memcmp(s, YOMI_SURF[i], remaining) == 0) return stable;
+      if (hit < 0 && n <= remaining && memcmp(s, YOMI_SURF[i], n) == 0) hit = i;
+    }
+    if (hit >= 0) {
+      const char* pron = YOMI_PRON[hit];
+      if (pron[0] && !is_small(pron) && strncmp(pron, "ー", 3) != 0 && moras >= minimum_moras)
+        stable = (size_t)(s - text);
+      for (const char* p = pron; p[0] && p[1] && p[2]; p += 3)
+        if (!is_small(p)) moras++;
+      s += strlen(YOMI_SURF[hit]);
+      continue;
+    }
+    int n;
+    unsigned cp = utf8_cp((const unsigned char*)s, &n);
+    if (cp == 0xFFFD && (unsigned char)*s >= 0x80) return stable;
+    if (cp >= 0x3041 && cp <= 0x3096) cp += 0x60;
+    if ((cp >= 0x30A1 && cp <= 0x30F6) || cp == 0x30FC) {
+      char k[3] = {(char)(0xE0 | (cp >> 12)), (char)(0x80 | ((cp >> 6) & 0x3F)),
+                   (char)(0x80 | (cp & 0x3F))};
+      if (!is_small(k)) {
+        // There is a known following full mora, so the previous one cannot be
+        // extended by a future small-kana character. Retain this following mora.
+        if (cp != 0x30FC && moras >= minimum_moras) stable = (size_t)(s - text);
+        moras++;
+      }
+    } else if (cp == 0xFF1F || cp == '?' || cp == 0x3001 || cp == 0x3002 || cp == 0xFF01 ||
+               cp == 0xFF0C || cp == 0xFF0E || cp == '!' || cp == ',' || cp == '.' || cp == '\n' ||
+               cp == 0x2026) {
+      return 0;  // Existing punctuation handling owns complete phrases.
+    }
+    s += n;
+  }
+  return stable;
+}

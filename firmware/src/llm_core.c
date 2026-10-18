@@ -129,6 +129,7 @@ static int load_tokenizer(LlmTokenizer *t, const unsigned char *buf, size_t len,
 int llm_init(Llm *m, const void *model, size_t model_len,
              const void *tok, size_t tok_len, int max_steps, llm_alloc_fn alloc) {
     memset(m, 0, sizeof(*m));
+    m->alloc = alloc;
     const char *base = (const char *)model;
     int magic;
     if (model_len < 40) return -1;
@@ -222,6 +223,7 @@ static void embed(Llm *m, float *x, int token) {
 
 static float *forward(Llm *m, int token, int pos, int need_logits) {
     if (pos < 2) m->prefix_len = 0;
+    if (pos < m->prompt_cache_n) m->prompt_cache_n = 0;
     LlmConfig *p = &m->config;
     LlmWeights *w = &m->weights;
     LlmState *s = &m->state;
@@ -302,11 +304,184 @@ float *llm_forward(Llm *m, int token, int pos) {
     return forward(m, token, pos, 1);
 }
 
+int llm_set_prompt_cache(Llm *m, int enabled) {
+    m->prompt_cache_enabled = 0;
+    m->prompt_cache_n = 0;
+    if (!enabled) return 0;
+    if (!m->prompt_cache_tokens)
+        m->prompt_cache_tokens = xcalloc(m->alloc, (size_t)m->max_steps * sizeof(int));
+    if (!m->prompt_cache_logits)
+        m->prompt_cache_logits = xcalloc(m->alloc, (size_t)m->config.vocab_size * sizeof(float));
+    if (!m->prompt_cache_tokens || !m->prompt_cache_logits) return -1;
+    m->prompt_cache_enabled = 1;
+    return 0;
+}
+
+void llm_invalidate_prompt_cache(Llm *m) {
+    m->prefix_len = 0;
+    m->prompt_cache_n = 0;
+}
+
+int llm_last_prefill_source(const Llm *m) { return m->prefill_source; }
+
+static void remember_prompt(Llm *m, const int *tokens, int n) {
+    if (!m->prompt_cache_enabled) return;
+    memcpy(m->prompt_cache_tokens, tokens, (size_t)n * sizeof(int));
+    memcpy(m->prompt_cache_logits, m->state.logits, (size_t)m->config.vocab_size * sizeof(float));
+    m->prompt_cache_n = n;
+}
+
+// LLMC v1 uses native IEEE float32 bytes from the target that performed the
+// prefill. PC-generated floats are not assumed bit-identical to Xtensa floats.
+#define SNAP_MAGIC 0x434d4c4cu
+#define SNAP_WORDS 24
+#define SNAP_HEADER (SNAP_WORDS * sizeof(uint32_t))
+
+static int snapshot_platform(void) {
+    const uint32_t one = 1;
+    return sizeof(float) == 4 && sizeof(int) == 4 && *(const unsigned char *)&one == 1;
+}
+
+static uint32_t snapshot_crc(uint32_t crc, const void *data, size_t n) {
+    const unsigned char *p = data;
+    for (size_t i = 0; i < n; i++) {
+        crc ^= p[i];
+        for (int j = 0; j < 8; j++) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return crc;
+}
+
+size_t llm_prompt_snapshot_size(const Llm *m, int n, int skip_prefix) {
+    if (!snapshot_platform() || n < 1 || n > m->max_steps ||
+        (skip_prefix != 0 && skip_prefix != 2) || skip_prefix > n) return 0;
+    size_t kv = (size_t)m->config.dim * m->config.n_kv_heads / m->config.n_heads;
+    size_t size = SNAP_HEADER + (size_t)n * 4 +
+                  2 * (size_t)m->config.n_layers * (n - skip_prefix) * kv * 4 +
+                  (size_t)m->config.vocab_size * 4;
+    return size <= UINT32_MAX ? size : 0;
+}
+
+static int snapshot_header(const Llm *m, const LlmPromptSnapshot *entry,
+                           const unsigned char identity[32], uint32_t h[SNAP_WORDS], int check_crc) {
+    if (!entry || !entry->data || entry->size < SNAP_HEADER || !identity || !snapshot_platform()) return -1;
+    memcpy(h, entry->data, SNAP_HEADER);
+    if (h[0] != SNAP_MAGIC || h[1] != LLM_SNAPSHOT_FORMAT || h[2] != entry->size ||
+        h[3] > (uint32_t)m->max_steps || h[4] > h[3] || h[23] != 0 ||
+        h[2] != llm_prompt_snapshot_size(m, (int)h[3], (int)h[4]) ||
+        h[5] != (uint32_t)m->config.dim || h[6] != (uint32_t)m->config.hidden_dim ||
+        h[7] != (uint32_t)m->config.n_layers || h[8] != (uint32_t)m->config.n_heads ||
+        h[9] != (uint32_t)m->config.n_kv_heads || h[10] != (uint32_t)m->config.vocab_size ||
+        h[11] != (uint32_t)m->config.seq_len || h[12] != (uint32_t)m->gs ||
+        h[13] != LLM_MATH_ABI || memcmp(&h[14], identity, 32) != 0) return -1;
+    const unsigned char *payload = (const unsigned char *)entry->data + SNAP_HEADER;
+    if (check_crc && (snapshot_crc(UINT32_MAX, payload, entry->size - SNAP_HEADER) ^ UINT32_MAX) != h[22])
+        return -1;
+    for (uint32_t i = 0; i < h[3]; i++) {
+        uint32_t token; memcpy(&token, payload + i * 4, 4);
+        if (token >= (uint32_t)m->config.vocab_size) return -1;
+    }
+    return 0;
+}
+
+int llm_set_prompt_snapshots(Llm *m, const LlmPromptSnapshot *entries, int count,
+                            const unsigned char identity[32], int enabled) {
+    m->snapshots_enabled = 0;
+    m->snapshots = NULL;
+    m->snapshot_count = 0;
+    if (!enabled || count == 0) return 0;
+    if (!entries || count < 0 || !identity) return -1;
+    for (int i = 0; i < count; i++) {
+        uint32_t h[SNAP_WORDS];
+        if (snapshot_header(m, entries + i, identity, h, 1)) return -1;
+    }
+    m->snapshots = entries;
+    m->snapshot_count = count;
+    memcpy(m->snapshot_identity, identity, 32);
+    m->snapshots_enabled = 1;
+    return 0;
+}
+
+static int restore_snapshot(Llm *m, const LlmPromptSnapshot *entry, const int *tokens, int n,
+                            const unsigned char identity[32], int check_crc) {
+    uint32_t h[SNAP_WORDS];
+    if (snapshot_header(m, entry, identity, h, check_crc)) return -1;
+    if (!tokens || n < 1 || h[3] != (uint32_t)n) return 0;
+    const unsigned char *p = (const unsigned char *)entry->data + SNAP_HEADER;
+    if (memcmp(p, tokens, (size_t)n * 4) != 0) return 0;
+    int skip = (int)h[4];
+    if (skip && (m->prefix_len != 2 || tokens[0] != m->prefix_tokens[0] ||
+                 tokens[1] != m->prefix_tokens[1])) return 0;
+    p += (size_t)n * 4;
+    int kv = m->config.dim * m->config.n_kv_heads / m->config.n_heads;
+    size_t bytes = (size_t)(n - skip) * kv * sizeof(float);
+    m->prompt_cache_n = 0;
+    for (int l = 0; l < m->config.n_layers; l++) {
+        size_t off = ((size_t)l * m->max_steps + skip) * kv;
+        memcpy(m->state.key_cache + off, p, bytes); p += bytes;
+        memcpy(m->state.value_cache + off, p, bytes); p += bytes;
+    }
+    memcpy(m->state.logits, p, (size_t)m->config.vocab_size * sizeof(float));
+    m->prefix_len = n >= 2 ? 2 : 0;
+    if (m->prefix_len) memcpy(m->prefix_tokens, tokens, sizeof(m->prefix_tokens));
+    remember_prompt(m, tokens, n);
+    m->prefill_source = 2;
+    return 1;
+}
+
+int llm_prompt_snapshot_import(Llm *m, const LlmPromptSnapshot *entry, const int *tokens, int n,
+                               const unsigned char identity[32]) {
+    return restore_snapshot(m, entry, tokens, n, identity, 1);
+}
+
+int llm_prompt_snapshot_export(Llm *m, const int *tokens, int n, int skip_prefix,
+                               const unsigned char identity[32], llm_snapshot_write_fn writer, void *ctx) {
+    size_t size = llm_prompt_snapshot_size(m, n, skip_prefix);
+    if (!size || !identity || !writer || !llm_prefill(m, tokens, n, NULL)) return -1;
+    uint32_t h[SNAP_WORDS] = {SNAP_MAGIC, LLM_SNAPSHOT_FORMAT, (uint32_t)size, (uint32_t)n,
+                            (uint32_t)skip_prefix, (uint32_t)m->config.dim, (uint32_t)m->config.hidden_dim,
+                            (uint32_t)m->config.n_layers, (uint32_t)m->config.n_heads,
+                            (uint32_t)m->config.n_kv_heads, (uint32_t)m->config.vocab_size,
+                            (uint32_t)m->config.seq_len, (uint32_t)m->gs, LLM_MATH_ABI};
+    memcpy(&h[14], identity, 32);
+    int kv = m->config.dim * m->config.n_kv_heads / m->config.n_heads;
+    size_t bytes = (size_t)(n - skip_prefix) * kv * sizeof(float);
+    uint32_t crc = snapshot_crc(UINT32_MAX, tokens, (size_t)n * 4);
+    for (int l = 0; l < m->config.n_layers; l++) {
+        size_t off = ((size_t)l * m->max_steps + skip_prefix) * kv;
+        crc = snapshot_crc(crc, m->state.key_cache + off, bytes);
+        crc = snapshot_crc(crc, m->state.value_cache + off, bytes);
+    }
+    crc = snapshot_crc(crc, m->state.logits, (size_t)m->config.vocab_size * sizeof(float));
+    h[22] = crc ^ UINT32_MAX;
+    if (writer(h, sizeof(h), ctx) || writer(tokens, (size_t)n * 4, ctx)) return -2;
+    for (int l = 0; l < m->config.n_layers; l++) {
+        size_t off = ((size_t)l * m->max_steps + skip_prefix) * kv;
+        if (writer(m->state.key_cache + off, bytes, ctx) || writer(m->state.value_cache + off, bytes, ctx)) return -2;
+    }
+    return writer(m->state.logits, (size_t)m->config.vocab_size * sizeof(float), ctx) ? -2 : 0;
+}
+
 float *llm_prefill(Llm *m, const int *tokens, int n, int *reused) {
     if (reused) *reused = 0;
+    m->prefill_source = 0;
     if (!tokens || n < 1 || n > m->max_steps) return NULL;
     for (int i = 0; i < n; i++)
         if (tokens[i] < 0 || tokens[i] >= m->config.vocab_size) return NULL;
+    if (m->prompt_cache_enabled && m->prompt_cache_n == n &&
+        memcmp(m->prompt_cache_tokens, tokens, (size_t)n * sizeof(int)) == 0) {
+        memcpy(m->state.logits, m->prompt_cache_logits, (size_t)m->config.vocab_size * sizeof(float));
+        if (reused) *reused = n;
+        m->prefill_source = 1;
+        return m->state.logits;
+    }
+    if (m->snapshots_enabled) {
+        for (int i = 0; i < m->snapshot_count; i++) {
+            if (restore_snapshot(m, m->snapshots + i, tokens, n, m->snapshot_identity, 0) == 1) {
+                if (reused) *reused = n;
+                return m->state.logits;
+            }
+        }
+    }
     // 最後の位置は必ず計算する。短いプロンプトで古いlogitsを返さない。
     int start = n > 2 && m->prefix_len == 2 &&
                 tokens[0] == m->prefix_tokens[0] && tokens[1] == m->prefix_tokens[1] ? 2 : 0;
@@ -317,6 +492,7 @@ float *llm_prefill(Llm *m, const int *tokens, int n, int *reused) {
         memcpy(m->prefix_tokens, tokens, sizeof(m->prefix_tokens));
         m->prefix_len = 2;
     }
+    remember_prompt(m, tokens, n);
     if (reused) *reused = start;
     return logits;
 }

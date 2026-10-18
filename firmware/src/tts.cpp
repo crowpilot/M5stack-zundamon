@@ -19,20 +19,20 @@ bool UnitTTS::readAt(size_t off, void* dst, size_t n) {
   return f_.read((uint8_t*)dst, n) == n;
 }
 
-bool UnitTTS::begin(fs::FS& fs, const char* path) {
+bool UnitTTS::begin(fs::FS& fs, const char* path, const TtsInitOptions& options) {
   f_ = fs.open(path, "r");
   if (!f_) { Serial.printf("[tts] cannot open %s\n", path); return false; }
-  return init();
+  return init(options);
 }
 
-bool UnitTTS::begin(const uint8_t* mem, size_t len) {
+bool UnitTTS::begin(const uint8_t* mem, size_t len, const TtsInitOptions& options) {
   mem_ = mem; memLen_ = len;
-  return init();
+  return init(options);
 }
 
-bool UnitTTS::begin(const esp_partition_t* part) {
+bool UnitTTS::begin(const esp_partition_t* part, const TtsInitOptions& options) {
   part_ = part;
-  return part_ && init();
+  return part_ && init(options);
 }
 
 static int16_t mulaw_dec(uint8_t u) {  // G.711 μ-law
@@ -42,7 +42,10 @@ static int16_t mulaw_dec(uint8_t u) {  // G.711 μ-law
   return (u & 0x80) ? -x : x;
 }
 
-bool UnitTTS::init() {
+bool UnitTTS::init(const TtsInitOptions& options) {
+  if (options.shared_work &&
+      (options.shared_work_bytes < sharedWorkBytes() ||
+       (reinterpret_cast<uintptr_t>(options.shared_work) % alignof(float)) != 0)) return false;
   char magic[4]; uint16_t h[6];
   readAt(0, magic, 4); readAt(4, h, sizeof(h));
   if (memcmp(magic, "ZBNK", 4) != 0 || (h[0] != 1 && h[0] != 2)) { Serial.println("[tts] bad bank"); return false; }
@@ -56,12 +59,21 @@ bool UnitTTS::init() {
   readAt(hdr + nIdx * sizeof(BankEntry), end_, sizeof(end_));
   dataOff_ = hdr + (nIdx + 12) * sizeof(BankEntry);
 
-  out_ = (float*)pmalloc(MAX_OUT * sizeof(float));
-  out16_ = (int16_t*)pmalloc(MAX_OUT * sizeof(int16_t));
-  unit_ = (float*)pmalloc(MAX_UNIT * sizeof(float));
-  raw_ = (int16_t*)pmalloc(MAX_UNIT * sizeof(int16_t));
+  if (options.shared_work) {
+    uint8_t* work = static_cast<uint8_t*>(options.shared_work);
+    out_ = reinterpret_cast<float*>(work);
+    unit_ = reinterpret_cast<float*>(work + MAX_OUT * sizeof(float));
+    raw_ = reinterpret_cast<int16_t*>(work + (MAX_OUT + MAX_UNIT) * sizeof(float));
+  } else {
+    out_ = (float*)pmalloc(MAX_OUT * sizeof(float));
+    unit_ = (float*)pmalloc(MAX_UNIT * sizeof(float));
+    raw_ = (int16_t*)pmalloc(MAX_UNIT * sizeof(int16_t));
+  }
+  out16_ = options.allocate_internal_pcm ? (int16_t*)pmalloc(MAX_OUT * sizeof(int16_t)) : nullptr;
   env_ = (uint8_t*)pmalloc(MAX_OUT / 320 + 1);
   fin_ = (float*)pmalloc(2 * M_ * sizeof(float));
+  if (!idx_ || !out_ || !unit_ || !raw_ || !env_ || !fin_ ||
+      (options.allocate_internal_pcm && !out16_)) return false;
   // np.hanning(4M)[:2M] と同じ
   for (int i = 0; i < 2 * M_; i++) fin_[i] = 0.5f - 0.5f * cosf(2.f * PI * i / (4 * M_ - 1));
   cap_ = MAX_OUT;
@@ -103,10 +115,18 @@ void UnitTTS::addAt(const float* x, size_t n, long start) {
   for (size_t i = 0; i < n && start + i < cap_; i++) out_[start + i] += x[i];
 }
 
-size_t UnitTTS::render(const MoraTok* seq, size_t n) {
-  if (!idx_) return 0;
+size_t UnitTTS::render(const MoraTok* seq, size_t n, const TtsRenderOptions& options) {
+  return renderTo(seq, n, out16_, MAX_OUT, options);
+}
+
+size_t UnitTTS::renderTo(const MoraTok* seq, size_t n, int16_t* dst, size_t capacity,
+                         const TtsRenderOptions& options) {
+  rendered_pcm_ = nullptr;
+  envLen_ = 0;
+  if (!idx_ || !dst || !capacity || (!seq && n)) return 0;
+  cap_ = capacity < MAX_OUT ? capacity : MAX_OUT;
   missing_ = 0;
-  len_ = 0; ensure(sr_ / 10);
+  len_ = 0; ensure((size_t)sr_ * options.leading_silence_ms / 1000);
   size_t pos = len_;
   int ctx = 0;          // 0=無音, 1..6 = 母音 a i u e o N
   int pp = P_L;
@@ -148,11 +168,10 @@ size_t UnitTTS::render(const MoraTok* seq, size_t n) {
     pp = cp;
   }
   if (ctx != 0) close();
-  ensure(len_ + sr_ / 10);
+  ensure(len_ + (size_t)sr_ * options.trailing_silence_ms / 1000);
 
   // int16 化と口パク用エンベロープ
-  envLen_ = 0;
-  for (size_t i = 0; i < len_; i += 320) {
+  for (size_t i = 0; options.compute_envelope && i < len_; i += 320) {
     float s = 0; size_t e = min(len_, i + 320);
     for (size_t j = i; j < e; j++) s += out_[j] * out_[j];
     float rms = sqrtf(s / (e - i));
@@ -160,7 +179,8 @@ size_t UnitTTS::render(const MoraTok* seq, size_t n) {
   }
   for (size_t i = 0; i < len_; i++) {
     float v = out_[i];
-    out16_[i] = (int16_t)(v > 32767 ? 32767 : v < -32767 ? -32767 : v);
+    dst[i] = (int16_t)(v > 32767 ? 32767 : v < -32767 ? -32767 : v);
   }
+  rendered_pcm_ = dst;
   return len_;
 }

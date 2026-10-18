@@ -37,7 +37,29 @@ static struct {
   uint16_t* bitrev;
   uint16_t *mel_lo, *mel_hi;  // 各メルフィルタの非ゼロ範囲 [lo, hi)
   int tile_in;
+  const int16_t* frontend_pcm;
+  int frontend_frames, frontend_samples, reused_frames;
 } S;
+
+static unsigned g_options;
+void asr_set_options(unsigned options) {
+  g_options = options & (ASR_OPT_SKIP_UNUSED_CONFIDENCE | ASR_OPT_RAW_MATCH);
+}
+unsigned asr_options(void) { return g_options; }
+
+void asr_frontend_reset(void) {
+  S.frontend_pcm = NULL;
+  S.frontend_frames = S.frontend_samples = 0;
+}
+void asr_frontend_begin(const int16_t* pcm) {
+  asr_frontend_reset();
+  S.frontend_pcm = pcm;
+}
+int asr_frontend_reused_frames(void) { return S.reused_frames; }
+void asr_release_scratch(void) {
+  asr_frontend_reset();
+  S.last_t2 = 0;
+}
 
 static const char* g_err = "";
 const char* asr_error(void) { return g_err; }
@@ -87,7 +109,24 @@ static float u32f(uint32_t u) {
   return f;
 }
 
-int asr_init(const void* blob, size_t blob_bytes, int max_samples, asr_alloc_fn alloc) {
+size_t asr_scratch_bytes(const void* blob, size_t blob_bytes, int max_samples) {
+  if (!blob || ((uintptr_t)blob & 3u) || (blob_bytes && blob_bytes < 64) || max_samples <= 0) return 0;
+  const uint32_t* hd = (const uint32_t*)blob;
+  if (hd[0] != MAGIC || hd[1] != VERSION || !hd[2] || !hd[3] || !hd[4] || !hd[6] ||
+      !hd[7] || !hd[8] || !hd[9] || !hd[11]) return 0;
+  uint64_t T = (uint64_t)max_samples < hd[3] ? 1 : 1 + ((uint64_t)max_samples - hd[3]) / hd[4];
+  uint64_t T1 = (T + 2 * (hd[7] / 2) - hd[7]) / hd[8] + 1;
+  uint64_t T2 = (T1 + 2 * (hd[7] / 2) - hd[7]) / hd[8] + 1;
+  uint64_t count = T * hd[2] + (T1 + T2) * hd[6] + T2 * (10 * (uint64_t)hd[9] + hd[11] + 1);
+  return count > SIZE_MAX / sizeof(float) ? 0 : (size_t)count * sizeof(float);
+}
+
+static int init_impl(const void* blob, size_t blob_bytes, int max_samples, asr_alloc_fn alloc,
+                     void* scratch, size_t scratch_bytes) {
+  S.ready = 0;
+  asr_release_scratch();
+  S.reused_frames = 0;
+  if (!blob || !alloc || (blob_bytes && blob_bytes < 64) || max_samples <= 0) return fail("bad init arguments");
   const uint32_t* hd = (const uint32_t*)blob;
   if (((uintptr_t)blob & 3u) != 0) return fail("blob is not 4-byte aligned");
   if (hd[0] != MAGIC) return fail("bad magic");
@@ -134,17 +173,24 @@ int asr_init(const void* blob, size_t blob_bytes, int max_samples, asr_alloc_fn 
   if (S.ch * S.k > ti) ti = S.ch * S.k;
   if (2 * H > ti) ti = 2 * H;
   S.tile_in = ti;
+  size_t arena_need = asr_scratch_bytes(blob, blob_bytes, max_samples), arena_offset = 0;
+  if (!arena_need) return fail("invalid scratch dimensions");
+  if (scratch && (((uintptr_t)scratch & 3u) || scratch_bytes < arena_need)) return fail("scratch arena too small or unaligned");
 #define A(ptr, n, fast) do { ptr = alloc(sizeof(*ptr) * (size_t)(n), fast); if (!ptr) return fail("out of memory: " #ptr); } while (0)
-  A(S.feat, S.max_t * S.n_mels, 0);
-  A(S.c1, S.max_t1 * S.ch, 0);
-  A(S.c2, S.max_t2 * S.ch, 0);
-  A(S.ga, S.max_t2 * 2 * H, 0);
-  A(S.gb, S.max_t2 * 2 * H, 0);
-  A(S.logits, S.max_t2 * S.vocab, 0);
-  A(S.lse, S.max_t2, 0);
+#define L(ptr, n) do { \
+  if (scratch) { ptr = (float*)((unsigned char*)scratch + arena_offset); arena_offset += sizeof(*ptr) * (size_t)(n); } \
+  else { A(ptr, n, 0); } \
+} while (0)
+  L(S.feat, S.max_t * S.n_mels);
+  L(S.c1, S.max_t1 * S.ch);
+  L(S.c2, S.max_t2 * S.ch);
+  L(S.ga, S.max_t2 * 2 * H);
+  L(S.gb, S.max_t2 * 2 * H);
+  L(S.logits, S.max_t2 * S.vocab);
+  L(S.lse, S.max_t2);
   for (int c = 0; c < 2; c++) {
     work_t* w = &S.w[c];
-    A(w->gin, S.max_t2 * H3, 0);
+    L(w->gin, S.max_t2 * H3);
     A(w->whh, H3 * H, 1);
     A(w->h, H, 1);
     A(w->gh, H3, 1);
@@ -159,6 +205,7 @@ int asr_init(const void* blob, size_t blob_bytes, int max_samples, asr_alloc_fn 
   A(S.mel_lo, S.n_mels, 1);
   A(S.mel_hi, S.n_mels, 1);
 #undef A
+#undef L
   for (int m = 0; m < S.n_mels; m++) {  // メルフィルタはほぼゼロなので非ゼロ範囲だけ計算する
     const float* w = S.melfb + m * S.nbins;
     int lo = 0, hi = S.nbins;
@@ -181,6 +228,16 @@ int asr_init(const void* blob, size_t blob_bytes, int max_samples, asr_alloc_fn 
   }
   S.ready = 1;
   return 0;
+}
+
+int asr_init(const void* blob, size_t blob_bytes, int max_samples, asr_alloc_fn alloc) {
+  return init_impl(blob, blob_bytes, max_samples, alloc, NULL, 0);
+}
+
+int asr_init_with_scratch(const void* blob, size_t blob_bytes, int max_samples, asr_alloc_fn alloc,
+                          void* scratch, size_t scratch_bytes) {
+  if (!scratch) return fail("missing scratch arena");
+  return init_impl(blob, blob_bytes, max_samples, alloc, scratch, scratch_bytes);
 }
 
 // ---- 特徴量 ---------------------------------------------------------------
@@ -247,10 +304,33 @@ static void feat_job(void* arg) {
   }
 }
 
+int asr_frontend_push(int n_samples) {
+  if (!S.ready || !S.frontend_pcm) return fail("frontend not started");
+  if (n_samples < S.frontend_samples || n_samples > S.max_samples) return fail("frontend PCM length is not append-only");
+  int T = n_samples < S.win ? 0 : num_frames(n_samples);
+  int added = T - S.frontend_frames;
+  if (added > 0) {
+    // Short chunks avoid waking the second core; every FFT uses the same arithmetic as batch mode.
+    feat_job_t job = {S.frontend_pcm, n_samples, S.frontend_frames, T, &S.w[0]};
+    feat_job(&job);
+  }
+  S.frontend_frames = T;
+  S.frontend_samples = n_samples;
+  return added;
+}
+
 static int compute_features(const int16_t* pcm, int n) {
   int T = num_frames(n);
-  feat_job_t a = {pcm, n, 0, T / 2, &S.w[0]}, b = {pcm, n, T / 2, T, &S.w[1]};
-  run2(feat_job, &a, &b);
+  int start = pcm == S.frontend_pcm && n >= S.win ? S.frontend_frames : 0;
+  if (start > T) start = T;  // the caller may trim the final silence
+  S.reused_frames = start;
+  if (start < T) {
+    int mid = start + (T - start) / 2;
+    feat_job_t a = {pcm, n, start, mid, &S.w[0]}, b = {pcm, n, mid, T, &S.w[1]};
+    run2(feat_job, &a, &b);
+  }
+  // CMVN writes over the raw features: a later inference must not reuse them a second time.
+  asr_frontend_reset();
   // 発話単位CMVN（母分散）
   for (int m = 0; m < S.n_mels; m++) {
     double mu = 0.0, var = 0.0;
@@ -418,6 +498,7 @@ static int clamp_len(int n) { return n > S.max_samples ? S.max_samples : n; }
 
 int asr_features(const int16_t* pcm, int n, const float** feat, int* n_frames) {
   if (!S.ready) return fail("not initialized");
+  if (!pcm || n < 0) return fail("bad PCM arguments");
   n = clamp_len(n);
   *n_frames = compute_features(pcm, n);
   *feat = S.feat;
@@ -426,6 +507,7 @@ int asr_features(const int16_t* pcm, int n, const float** feat, int* n_frames) {
 
 int asr_logits(const int16_t* pcm, int n, const float** logits, int* n_out) {
   if (!S.ready) return fail("not initialized");
+  if (!pcm || n < 0) return fail("bad PCM arguments");
   n = clamp_len(n);
   prof_start();
   int T = compute_features(pcm, n);
@@ -464,10 +546,12 @@ int asr_recognize(const int16_t* pcm, int n, char* out, int out_size, float* con
     for (int i = 1; i < S.vocab; i++)
       if (v[i] > v[best]) best = i;
     if (best != 0) {
-      double z = 0.0;
-      for (int i = 0; i < S.vocab; i++) z += exp((double)(v[i] - v[best]));
-      conf += 1.0 / z;
-      emitted++;
+      if (confidence || !(g_options & ASR_OPT_SKIP_UNUSED_CONFIDENCE)) {
+        double z = 0.0;
+        for (int i = 0; i < S.vocab; i++) z += exp((double)(v[i] - v[best]));
+        conf += 1.0 / z;
+        emitted++;
+      }
       if (best != prev) {
         const char* s = S.vocab_str + best * 4;
         int sl = 0;
@@ -530,7 +614,7 @@ static float ctc_viterbi(const int* lab, int L, int T) {
 }
 
 int asr_match(const char* const* phrases, int n, float* gaps) {
-  if (!S.ready || n <= 0) return -1;
+  if (!S.ready || n <= 0 || S.last_t2 <= 0) return -1;
   int T = S.last_t2, V = S.vocab;
   double free_lp = 0.0;  // 制約なし最良経路 = 各フレームの最大値の和
   for (int t = 0; t < T; t++) {
@@ -538,10 +622,16 @@ int asr_match(const char* const* phrases, int n, float* gaps) {
     float mx = row[0];
     for (int i = 1; i < V; i++)
       if (row[i] > mx) mx = row[i];
-    double z = 0.0;
-    for (int i = 0; i < V; i++) z += exp((double)(row[i] - mx));
-    S.lse[t] = mx + (float)log(z);
-    free_lp += mx - S.lse[t];
+    if (g_options & ASR_OPT_RAW_MATCH) {
+      // Any common per-frame offset cancels between the free and constrained paths.
+      // Subtract max(logit), rather than logsumexp, to avoid exponentials AND large raw sums.
+      S.lse[t] = mx;
+    } else {
+      double z = 0.0;
+      for (int i = 0; i < V; i++) z += exp((double)(row[i] - mx));
+      S.lse[t] = mx + (float)log(z);
+      free_lp += mx - S.lse[t];
+    }
   }
   int best = -1;
   float best_gap = 0.0f;
