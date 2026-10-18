@@ -43,7 +43,7 @@ static constexpr float START_RATIO = 3.0f;
 static constexpr float END_RATIO = 1.8f;
 static constexpr float MIN_LEVEL = 40.0f;
 static constexpr int CALIB_CHUNKS = 50;           // 起動時1秒で雑音を測る
-static constexpr float MATCH_GAP = 2.5f;
+static constexpr float MATCH_GAP = 2.0f;           // kana_asr v2-small・29フレーズで決めた値
 static constexpr float MATCH_MARGIN = 1.0f;
 static constexpr int LLM_STEPS = 256;             // KVキャッシュ長
 
@@ -262,6 +262,7 @@ static size_t talk_len = 0;
 static bool talk_on = false, talk_emo_fixed = false;
 static Emotion talk_emo = EMO_NEUTRAL;
 static uint32_t talk_t0 = 0;
+static int talk_first_piece_ms = -1;
 static int talk_first_ms = -1, talk_chunks = 0, talk_tts_ms = 0, talk_audio_ms = 0, talk_skip = 0, talk_missing = 0;
 
 static void talk_begin(Emotion emo, bool emo_fixed) {
@@ -272,6 +273,7 @@ static void talk_begin(Emotion emo, bool emo_fixed) {
   talk_emo_fixed = emo_fixed;
   talk_t0 = millis();
   talk_first_ms = -1;
+  talk_first_piece_ms = -1;
   talk_chunks = talk_tts_ms = talk_audio_ms = talk_skip = talk_missing = 0;
   talk_on = tts_ok && talk_buf[TALK_BUFS - 1];
   if (!talk_on) return;
@@ -349,6 +351,7 @@ static void talk_flush(bool final) {
 }
 
 static void talk_feed(const char* piece, const float* next_logits) {
+  if (talk_first_piece_ms < 0) talk_first_piece_ms = (int)(millis() - talk_t0);  // 話しかけの読み込み＋1トークン目
   if (!talk_on) return;
   size_t l = strlen(piece);
   if (talk_len + l < sizeof(talk_pending)) {
@@ -415,6 +418,7 @@ static void respond(const char* heard, const char* kana, const char* phrase, int
   json_str("feel", zunda_feel_name(feel));
   json_str("say", last_say);
   json_str("voice", EMO_NAME[talk_emo]);
+  Serial.printf("\"prompt_tokens\":%d,\"first_piece_ms\":%d,", zunda_brain_last_prompt_tokens(), talk_first_piece_ms);
   Serial.printf("\"first_sound_ms\":%d,\"chunks\":%d,\"tts_ms\":%d,\"audio_ms\":%d,\"done_ms\":%d,\"yomi_skip\":%d,"
                 "\"tts_missing\":%d,",
                 talk_first_ms, talk_chunks, talk_tts_ms, talk_audio_ms, talk_total_ms, talk_skip,

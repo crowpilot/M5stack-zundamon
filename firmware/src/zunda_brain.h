@@ -30,7 +30,8 @@ int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *f
 // logits をタグ8個だけに絞って一番の気持ち（0〜7）。返事の途中で「今終わるならどの気持ちか」を見るのに使う
 int zunda_feel_from_logits(const float *logits);
 
-const char *zunda_feel_name(int feel);  // "ふつう" など（範囲外は "?"）
+const char *zunda_feel_name(int feel);
+int zunda_brain_last_prompt_tokens(void);  // 直前の返事で読み込ませた話しかけのトークン数（BOS・Ａ：・Ｂ：込み）  // "ふつう" など（範囲外は "?"）
 
 #ifdef __cplusplus
 }

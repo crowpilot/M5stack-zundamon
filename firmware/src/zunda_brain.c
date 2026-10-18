@@ -8,6 +8,9 @@ static const char *const kFeel[ZUNDA_N_FEEL] = {
 };
 static int feel_id[ZUNDA_N_FEEL];
 static int id_a = -1, id_b = -1;
+static int last_prompt_tokens = 0;
+
+int zunda_brain_last_prompt_tokens(void) { return last_prompt_tokens; }
 
 static int find_piece(Llm *m, const char *s) {
     for (int i = 0; i < m->tok.vocab_size; i++)
@@ -64,6 +67,7 @@ int zunda_brain_reply(Llm *m, const char *heard, char *out, int out_size, int *f
         toks[limit - 1] = toks[n - 1];
         n = limit;
     }
+    last_prompt_tokens = n;
     float *logits = NULL;
     int pos = 0;
     for (int i = 0; i < n; i++) logits = llm_forward(m, toks[i], pos++);
