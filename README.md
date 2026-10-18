@@ -3,7 +3,7 @@
 M5Stack Core2 1台で、話しかけると **聞き取って → ずんだもんLLMが返事を考えて → 画面に出して → ずんだもんの声で読み上げる** 試作です。
 Wi-Fi・サーバー・SDカードは使いません。すべて Core2（ESP32、PSRAM 4MB、フラッシュ 16MB）の中で動きます。
 
-版: **v0.0.2**（[CHANGELOG.md](CHANGELOG.md)）
+版: **v0.0.3**（[CHANGELOG.md](CHANGELOG.md)）
 
 ## しくみ
 
@@ -36,7 +36,7 @@ Wi-Fi・サーバー・SDカードは使いません。すべて Core2（ESP32�
 
 すぐ試すだけなら、Releases の `M5stack-zundamon-v<版>-core2.bin` を 0x0 に、`M5stack-zundamon-voice-bank.bin` を 0x490000 に書けば動きます（ビルド不要）。
 ```
-esptool.py --chip esp32 --baud 460800 write_flash 0x0 M5stack-zundamon-v0.0.2-core2.bin 0x490000 M5stack-zundamon-voice-bank.bin
+esptool.py --chip esp32 --baud 460800 write_flash 0x0 M5stack-zundamon-v0.0.3-core2.bin 0x490000 M5stack-zundamon-voice-bank.bin
 ```
 
 音声バンクを自分で作り直すとき（VOICEVOX Core 0.16 以降の Python 版が必要。`VV_DIR` に Core の場所）:
