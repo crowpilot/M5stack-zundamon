@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 VER=$(sed -n 's/.*-DZUNDA_VERSION=\\"\(.*\)\\".*/\1/p' firmware/platformio.ini)
 (cd firmware && pio run)
-B=firmware/.pio/build/m5stack-core2
+B=firmware/.pio/build/integration-selected  # platformio.ini の default_envs
 mkdir -p dist
 PY="$HOME/.platformio/penv/bin/python"
 [ -x "$PY" ] || PY="$(dirname "$(readlink -f "$(command -v pio)")")/python"

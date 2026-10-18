@@ -3,10 +3,10 @@
 M5Stack Core2 1台で、話しかけると **聞き取って → ずんだもんLLMが返事を考えて → 画面に出して → ずんだもんの声で読み上げる** 試作です。
 Wi-Fi・サーバー・SDカードは使いません。すべて Core2（ESP32、PSRAM 4MB、フラッシュ 16MB）の中で動きます。
 
-版: **v0.0.3**（[CHANGELOG.md](CHANGELOG.md)）
+版: **v0.0.4**（[CHANGELOG.md](CHANGELOG.md)）
 
-このブランチは **0.0.3-s1 の応答時間短縮試行**です。変更内容・実機比較・元に戻す手順は
-[試行記録](docs/SPEEDUP_TRIAL_20261018.md)を参照してください。通常のビルドでは短縮処理が有効になります。
+v0.0.4 で応答を速くする工夫を入れました（登録文の計算結果の埋め込み、LLM の重みを PSRAM へ、録音中の前処理など）。
+中身と実機比較は [docs/INTEGRATION_TRIALS_20261018.md](docs/INTEGRATION_TRIALS_20261018.md)。
 
 ## しくみ
 
@@ -20,7 +20,7 @@ Wi-Fi・サーバー・SDカードは使いません。すべて Core2（ESP32�
 |---|---|
 | 聞き取り | 約0.3秒（話し終わりの検出 0.7秒は別） |
 | 返事を作る | 約2〜3秒（10トークン前後）。最初の句ができた時点で喋り始める |
-| 喋り出しまで | 約1〜2秒（話しかけの処理開始から） |
+| 喋り出しまで | 登録文で約0.2〜0.6秒、それ以外で約1〜1.5秒（LLM 開始から。同じ文の2回目は約0.2秒） |
 | 音声の合成 | 1句あたり約0.04秒 |
 
 ## 必要なもの
@@ -39,7 +39,7 @@ Wi-Fi・サーバー・SDカードは使いません。すべて Core2（ESP32�
 
 すぐ試すだけなら、Releases の `M5stack-zundamon-v<版>-core2.bin` を 0x0 に、`M5stack-zundamon-voice-bank.bin` を 0x490000 に書けば動きます（ビルド不要）。
 ```
-esptool.py --chip esp32 --baud 460800 write_flash 0x0 M5stack-zundamon-v0.0.3-core2.bin 0x490000 M5stack-zundamon-voice-bank.bin
+esptool.py --chip esp32 --baud 460800 write_flash 0x0 M5stack-zundamon-v0.0.4-core2.bin 0x490000 M5stack-zundamon-voice-bank.bin
 ```
 
 音声バンクを自分で作り直すとき（VOICEVOX Core 0.16 以降の Python 版が必要。`VV_DIR` に Core の場所）:

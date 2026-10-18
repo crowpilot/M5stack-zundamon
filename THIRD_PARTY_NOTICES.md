@@ -7,6 +7,7 @@
 | llama2.c（Andrej Karpathy） | `firmware/src/llm_core.c` の元 | MIT License, Copyright (c) 2023 Andrej |
 | M5Unified / M5GFX（M5Stack） | ビルド時に取得（同梱しない）。日本語フォント efont を含む | MIT License（efont は BSD 系） |
 | ずんだもんLLM（tiny-ja-llm、zunda-small-tagend-679） | `models/zunda-small-tagend-679_q8.bin`, `models/tok_tagend.bin` | MIT。学習データは Gemma 4（Apache 2.0）で生成 |
+| 登録文のキャッシュ | `models/prompt_cache_679.bin` | 上の LLM で登録文を計算した途中結果（MIT） |
 | 読み辞書 | `tools/yomi/yomi.tsv`, `firmware/src/yomi_dict.h` | pyopenjtalk（MIT）と Open JTalk 辞書（Modified BSD、NAIST-jdic 由来）で LLM の返事から取り出した読み |
 | 音声認識の重み（kana_asr） | `models/kana_asr.bin` | 作者が学習したもの。学習データは下の「音声認識の学習データ」 |
 | ずんだもんの音声（VCV単位バンク） | Releases の `M5stack-zundamon-voice-bank.bin` | VOICEVOX:ずんだもん。VOICEVOX Core で作った音声を短く切り出して並べたもの。[音源利用規約](https://zunko.jp/con_ongen_kiyaku.html) に従う |
